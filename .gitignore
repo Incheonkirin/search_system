@@ -1,0 +1,18 @@
+# 데이터(약관 원본·색인 산출물) — 코드 저장소엔 미포함
+data/corpus/
+data/index/
+
+# 모델 캐시
+models/
+*.pt
+*.bin
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# OS
+.DS_Store

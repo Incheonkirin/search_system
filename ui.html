@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>보험 약관 IR 검색</title>
+<style>
+  :root{--bg:#fafbfc;--fg:#1d2433;--muted:#6b7280;--line:#e5e8ec;
+    --bm25:#1c7ed6;--vec:#7048e8;--cite:#e03131;--chip:#f1f3f6}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
+    font-size:14px;line-height:1.5}
+  .wrap{max-width:980px;margin:0 auto;padding:24px 18px 80px}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+    background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+  .bar input[type=text]{flex:1;min-width:220px;border:1px solid var(--line);
+    border-radius:8px;padding:9px 12px;font-size:14px}
+  .bar select,.bar input[type=number]{border:1px solid var(--line);border-radius:8px;padding:9px}
+  .bar button{background:var(--fg);color:#fff;border:0;border-radius:8px;
+    padding:9px 16px;font-size:14px;cursor:pointer}
+  .bar label{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:4px}
+  .meta{margin:16px 0 6px;color:var(--muted);font-size:13px}
+  .chips{display:flex;gap:5px;flex-wrap:wrap;margin:6px 0 14px}
+  .chip{background:var(--chip);border-radius:6px;padding:2px 8px;font-size:12.5px}
+  .chip .pos{color:var(--muted);font-size:11px;margin-left:3px}
+  table{width:100%;border-collapse:collapse;background:#fff;
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:12px;color:var(--muted);font-weight:600;background:#fcfcfd}
+  tr:last-child td{border-bottom:0}
+  tr.row{cursor:pointer}
+  tr.row:hover{background:#f8f9fb}
+  .rank{color:var(--muted);font-variant-numeric:tabular-nums}
+  .score{font-variant-numeric:tabular-nums;font-size:12.5px}
+  .ret{font-size:11px;color:var(--muted)}
+  .ret b.bm25{color:var(--bm25)} .ret b.vec{color:var(--vec)}
+  .path{font-size:12px;color:var(--muted)}
+  .snip{font-size:13px}
+  .full{display:none;background:#f7f8fa;white-space:pre-wrap;font-size:13px;
+    padding:10px 12px;border-radius:8px;margin-top:6px}
+  .full.open{display:block}
+  .empty{color:var(--muted);padding:18px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>보험 약관 IR 검색</h1>
+  <div class="sub">형태소(nori) · BM25 · BGE-M3 임베딩 · RRF · 크로스인코더 리랭크</div>
+
+  <div class="bar">
+    <input id="q" type="text" placeholder="예: 암 진단보험금 지급 기준" autofocus>
+    <select id="mode" title="검색 모드">
+      <option value="rerank" selected>rerank</option>
+      <option value="hybrid">hybrid</option>
+      <option value="cross">cross</option>
+      <option value="lexical">lexical</option>
+      <option value="semantic">semantic</option>
+    </select>
+    <input id="k" type="number" value="10" min="1" max="50" style="width:64px" title="결과 수">
+    <label><input id="collapse" type="checkbox"> 중복접기</label>
+    <button id="go">검색</button>
+  </div>
+
+  <div id="out"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => (s||"").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function chips(terms){
+  if(!terms || !terms.length) return "";
+  return `<div class="meta">검색어</div><div class="chips">` +
+    terms.map(t => `<span class="chip">${esc(t.token)}${t.pos?`<span class="pos">${esc(t.pos)}</span>`:""}</span>`).join("") +
+    `</div>`;
+}
+
+function retCell(h){
+  const parts = [];
+  if(h.bm25_rank!=null) parts.push(`<b class="bm25">bm25#${h.bm25_rank}</b>`);
+  if(h.vec_rank!=null) parts.push(`<b class="vec">vec#${h.vec_rank}</b>`);
+  return parts.join(" ");
+}
+
+function render(d){
+  if(!d.results || !d.results.length){
+    $("#out").innerHTML = `<div class="empty">결과 없음. (ES·색인 준비 여부 확인: <code>make es-up</code> → <code>make index</code>)</div>`;
+    return;
+  }
+  let html = chips(d.search_terms);
+  html += `<div class="meta">${esc(d.mode)} · ${d.count}건</div>`;
+  html += `<table><thead><tr><th>#</th><th>점수</th><th>검색기</th><th>조항</th></tr></thead><tbody>`;
+  d.results.forEach((h, i) => {
+    html += `<tr class="row" data-i="${i}">
+      <td class="rank">${h.rank}</td>
+      <td class="score">${(h.score||0).toFixed(3)}</td>
+      <td class="ret">${retCell(h)}</td>
+      <td>
+        <div class="path">${esc(h.section_path||h.doc_title||"")} · ${esc(h.insurer||"")}</div>
+        <div class="snip">${esc(h.snippet||"")}</div>
+        <div class="full" id="full-${i}">${esc(h.text||"")}</div>
+      </td></tr>`;
+  });
+  html += `</tbody></table>`;
+  $("#out").innerHTML = html;
+  document.querySelectorAll("tr.row").forEach(tr => tr.onclick = () => {
+    $(`#full-${tr.dataset.i}`).classList.toggle("open");
+  });
+}
+
+async function run(){
+  const q = $("#q").value.trim();
+  if(!q) return;
+  $("#out").innerHTML = `<div class="empty">검색 중…</div>`;
+  const params = new URLSearchParams({q, k:$("#k").value, mode:$("#mode").value, collapse:$("#collapse").checked});
+  try{
+    const r = await fetch(`/search?${params}`);
+    render(await r.json());
+  }catch(e){
+    $("#out").innerHTML = `<div class="empty">오류: ${esc(String(e))}</div>`;
+  }
+}
+$("#go").onclick = run;
+$("#q").addEventListener("keydown", e => { if(e.key==="Enter") run(); });
+</script>
+</body>
+</html>
